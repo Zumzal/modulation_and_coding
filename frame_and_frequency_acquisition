@@ -1,0 +1,53 @@
+function [tau_est, delta_f_est] = frame_freq_acq(y, a, T, K, pilot_len)
+% FRAME_FREQ_ACQ  Frame start and CFO estimation via differential cross-correlation
+%
+% Inputs:
+%   y          – received baseband samples (vector)
+%   a          – known pilot sequence (length = pilot_len)
+%   T          – symbol period (seconds)
+%   K          – number of lags to average over
+%   pilot_len  – length of pilot sequence (samples)
+%
+% Outputs:
+%   tau_est      – estimated pilot start index in y
+%   delta_f_est  – estimated CFO (Hz)
+%
+% Implements:
+%   D_k[n] = (1/(N–k)) sum_{l=k}^{N–1} (y*[n+l] a[l]) (y*[n+l–k] a[l–k])^*   (eq 2) :contentReference[oaicite:0]{index=0}:contentReference[oaicite:1]{index=1}
+%   tau_est = argmax_n sum_{k=1}^K |D_k[n]|                                   (eq 3) :contentReference[oaicite:2]{index=2}:contentReference[oaicite:3]{index=3}
+%   delta_f_est = –(1/K) sum_{k=1}^K arg(D_k[tau_est]) / (2π k T)             (eq 4) :contentReference[oaicite:4]{index=4}:contentReference[oaicite:5]{index=5}
+%
+N = length(a);
+L = length(y);
+
+% Preallocate metric
+metric = zeros(L-N+1,1);
+
+% Compute D_k[n] for each candidate n
+for n = 1:(L-N+1)
+    Dk = zeros(K,1);
+    for k = 1:K
+        acc = 0;
+        for l = (k+1):N
+            acc = acc + (conj(y(n+l-1)) * a(l)) * conj(conj(y(n+l-k-1)) * a(l-k));
+        end
+        Dk(k) = acc / (N-k);
+    end
+    metric(n) = sum(abs(Dk));
+end
+
+% 1) Frame start
+[~, tau_est] = max(metric);
+
+% 2) CFO estimate
+Dk_at_tau = zeros(K,1);
+for k = 1:K
+    acc = 0;
+    for l = (k+1):N
+        acc = acc + (conj(y(tau_est+l-1)) * a(l)) * conj(conj(y(tau_est+l-k-1)) * a(l-k));
+    end
+    Dk_at_tau(k) = acc / (N-k);
+end
+delta_f_est = -mean(angle(Dk_at_tau) ./ (2*pi*k*T)) ;
+
+end
