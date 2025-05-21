@@ -93,6 +93,14 @@ signalPowerBaseband = mean(abs(filtered_TX_signal).^2)*T_symb; % power of the co
 signalPowerWideband = signalPowerBaseband/2; % when transmitted over a real channel, the power is plit in 2
 Eb = signalPowerWideband /Nbps; % energy per bit
 
+PPM = [0 2 10 20 50 100];  % décalage de fréquence en parties par million
+
+phase_offset = 0;       % décalage de phase fixe
+time_shift_frac = 0;     % décalage temporel en fraction de T_symb
+
+ber_cfo= zeros(length(PPM),length(EbN0_dom));
+for m = 1 : length(PPM)
+    CFO_Hz = PPM(m) * f_symb / 1e6;  % conversion PPM → Hz
 EbN0_index = 1;
 for EbN0 = EbN0_dom
     for i=1:iter   
@@ -108,10 +116,7 @@ for EbN0 = EbN0_dom
 
         % CFO et Phase
 
-        PPM = 500;  % décalage de fréquence en parties par million
-        CFO_Hz = PPM * f_symb / 1e6;  % conversion PPM → Hz
-        phase_offset = 0;       % décalage de phase fixe
-        time_shift_frac = 0;     % décalage temporel en fraction de T_symb
+        
         
         % Recalcule axe temps pour signal filtré
         n = 0:length(sn)-1;
@@ -152,31 +157,39 @@ for EbN0 = EbN0_dom
     end
     BER(EbN0_index) = sum(BER_array(:))/iter;
     EbN0_index = EbN0_index + 1;
+
 end
-
-% figure;
-% title('transmit and received signal')
-% plot(linspace(0,symbols/BW, symbols*OSF), TX_symb_up, 'r')
-% hold on
-% plot(linspace(0,symbols/BW, symbols*OSF), RX_signal, 'g')
-% legend('transmitted signal', 'received signal')
-
 
 
 scatterplot(RX_TTT);
+title(['Constellation for CFO = ', num2str(PPM(m)), 'ppm']);
+ ber_cfo(m,:) = BER;
 
 
-fprintf('BER = %e\n', BER);
 
+% fprintf('BER = %e\n', BER);
+end
 %% plots BER
-
 figure;
-grid on;
-title('ber curves for 16-QAM')
-semilogy(EbN0_dom,BER(:));hold on;
-semilogy(EbN0_dom, berawgn(EbN0_dom,'qam',2^Nbps))
+for j = 1:length(PPM)
+    semilogy(EbN0_dom, ber_cfo(j,:));
+    hold on;
+end
+
 xlabel('Eb/N0 [dB]');
 ylabel('BER');
-title('Bit Error Rate');
-legend('Experimental', 'Theoritical');
+title('Bit Error Rate for different values of CFO');
+legend('0 ppm', '2 ppm', '10 ppm', '20 ppm', '50 ppm', '100 ppm');
  ylim([10^-5 1]);
+
+
+% figure;
+% grid on;
+% title('ber curves for 16-QAM')
+% semilogy(EbN0_dom,BER(:));hold on;
+% semilogy(EbN0_dom, berawgn(EbN0_dom,'qam',2^Nbps))
+% xlabel('Eb/N0 [dB]');
+% ylabel('BER');
+% title('Bit Error Rate');
+% legend('Experimental', 'Theoritical');
+%  ylim([10^-5 1]);
