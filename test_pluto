@@ -1,0 +1,121 @@
+clear; close all; clc;
+
+%% PLUTO ACQUISITION
+
+%% parameters
+
+% Nbps_list = [4, 6];        % 4 → 16-QAM, 6 → 64-QAM
+% M_list = [16, 64];
+% labels    = {'16-QAM','64-QAM'};
+% for idx = 1:length(Nbps_list)
+
+Nbps = 4; % number of bit per symbol
+modulation = 'qam';
+Nsymb = 5000; % number of symbols
+Nb = Nbps * Nsymb; % number of bits
+rollOff = 0.2; % roll-off factor
+OSF = 4; % oversampling factor, to increase the sampling frequency
+N_taps = 101 ;%number of taps, odd so the filter response is centered
+BW = 6e6; % 6MHz of bandwith
+averageNb = 1; % number of iterations to average the BER
+
+T_symb = (1 + rollOff)/BW ; % symbol period, inverse of the symbol rate
+f_symb = 1/T_symb; % symbol rate. [symb/s]
+Fsampling =  f_symb*OSF; % sampling frequency, calculated as f_symb * M
+Tbit = T_symb / Nbps;
+
+% frequency domain generation
+stepOffset = Fsampling * 1/N_taps; % stepOffset, calculate the frequency step size
+fmax = stepOffset * (N_taps*1)/2; % highest/maximum frequency
+f = linspace(-fmax, fmax, N_taps); % frequency grid
+
+% time domain generation
+Delta_t = 1/Fsampling; % Time resolution
+t = (-(N_taps-1)/2 : (N_taps-1)/2) * Delta_t; % time vector for the impulse response of the Nyquist filter
+t_symb = (-(N_taps-1)/2 : (N_taps-1)/2) * T_symb; % time vector in terms of symbol duration
+
+%% BER parameters
+EbN0max = 20;
+EbN0_dom = 0:1:EbN0max;
+iter = 50;
+BER_array = zeros(1,iter);
+BER = zeros(1, length(EbN0_dom));
+%%
+NumBits = 15000; % numùber totlat of bits 
+pilot_length = 25; % 
+pilotK = 12; % K value 
+OSF = 100; % OSF 
+fcarrier = 600e6;  % frequence des symboles
+Rsamp = f_symb * (1+rollOff);
+
+% Transmitter system object
+txPluto = sdrtx("Pluto",...
+"RadioID", "usb:0",...
+"Gain", -10,... % -90 to 0 dB
+"CenterFrequency", fcarrier,... % 335e6 to 3.8e9 [Hz]
+"BasebandSampleRate", Rsamp); % 60e3 to 60e6 [Hz]
+
+% Receiver system object
+rxPluto = sdrrx("Pluto",...
+"RadioID", "usb:0",...
+"CenterFrequency", fcarrier,... % 335e6 to 3.8e9 [Hz]
+"GainSource", "Manual",... % Manual, AGC Slow Attack
+"Gain", 10,... % -4 to 71 [dB]
+"BasebandSampleRate", Rsamp,... % 60e3 to 60e6 [Hz]
+"EnableBurstMode", true,...
+"NumFramesInBurst", 1,...
+"SamplesPerFrame", 200000,...
+"OutputDataType", "double" );
+
+%% signal creation
+
+bitstream = randi([0 1], Nb, 1); % Generate random bits
+mapped_symbols = mapping(bitstream, Nbps, 'qam');
+
+TX_symb_up = upsample(mapped_symbols, OSF); % upsamle the symbol sequence by a factor OSF
+modulatedSignal = mapping(bitstream, Nbps, modulation); % Mapping
+[h_RRC, H_RRC, H_RC_plot, h_RC] = RaisedCosine(f, T_symb, rollOff, N_taps);
+h_RRC = h_RRC' ; % transpose the filter to use in convolution
+filtered_TX_signal = conv(TX_symb_up, h_RRC); % convolution between filter impulse response and oversampled symbols vector
+
+pilot = modulatedSignal(1:pilotK);
+
+%% SIGNAL PROCESSING
+
+buffer_tx = filtered_TX_signal;
+
+
+% Periodic transmission
+txPluto.transmitRepeat(buffer_tx);
+
+% Burst reception
+[data_rx,datavalid,overflow] = rxPluto();
+
+% if (overflow)
+% disp("Samples dropped");
+% end
+
+signalIn = data_rx(:) ;
+
+% first pass to estimate the CFO
+RXsignal = conv(signalIn, h_RRC); % RRC filtering
+RXsignal = RX_signal((length(h_RRC)-1) + (1:length(TX_symb_up)));
+RX_downsampled_by2 = downsample(RX_signal, 2);  % OSF = 4 → on garde 2 échantillons/symbole
+afterGardner = gardner(RX_downsampled_by2, K, 4);
+[~, CFOest] = frame_freq_acq(afterGardner,pilot, t_symb, pilotK, pilot_length);% Frame acquisition
+
+% correct the CFO
+n = 0:length(signalIn)-1;
+ts = n / Fsampling;
+ts = ts(:);
+
+CFOcorrected = signalIn .* exp(-1j*2*pi*CFOest*ts);
+% continue the processing
+RXsignal = conv(CFOcorrected, h_RRC); % RRC filtering
+afterGardner = gardner(RXsignal, K, 4);
+downsampledSignal = downsample(afterGardner, 2); % Downsampling
+demodulatedSignal = demapping(downsampledSignal, Nbps, 'qam'); % Demapping
+
+% compare the demodulated signal with the original bitstream
+BER = sum(bitstream ~= demodulatedSignal) / length(bitstream); % Bit Error Rate
+disp(['Bit Error Rate: ', num2str(BER)]);
