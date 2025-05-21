@@ -1,0 +1,182 @@
+%% step2
+clear; close all; clc;
+
+%%% project modulation and coding %%%%
+
+%%% Nima Khansir %%%
+
+
+%% step 1 : mapping and demapping of bit stream
+
+%% parameters
+%% symb rate ? 
+
+Nbps = 4; % number of bit per symbol
+Nsymb = 1000; % number of symbols
+Nb = Nbps * Nsymb; % number of bits
+rollOff = 0.2; % roll-off factor
+OSF = 4; % oversampling factor, to increase the sampling frequency
+N_taps = 101 ;%number of taps, odd so the filter response is centered
+BW = 6e6; % 6MHz of bandwith
+% EbN0 = 0:1:20; % vector for BER comparison
+averageNb = 1; % number of iterations to average the BER
+
+T_symb = (1 + rollOff)/BW ; % symbol period, inverse of the symbol rate
+f_symb = 1/T_symb; % symbol rate. [symb/s]
+Fsampling =  f_symb*OSF; % sampling frequency, calculated as f_symb * M
+Tbit = T_symb / Nbps;
+
+% frequency domain generation
+stepOffset = Fsampling * 1/N_taps; % stepOffset, calculate the frequency step size
+fmax = stepOffset * (N_taps*1)/2; % highest/maximum frequency
+f = linspace(-fmax, fmax, N_taps); % frequency grid
+
+% time domain generation
+Delta_t = 1/Fsampling; % Time resolution
+t = (-(N_taps-1)/2 : (N_taps-1)/2) * Delta_t; % time vector for the impulse response of the Nyquist filter
+t_symb = (-(N_taps-1)/2 : (N_taps-1)/2) * T_symb; % time vector in terms of symbol duration
+
+%% BER parameters
+EbN0max = 20;
+EbN0_dom = 0:1:EbN0max;
+iter = 20;
+BER_array = zeros(1,iter);
+BER = zeros(1, length(EbN0_dom));
+
+%% signal processing 
+
+% generate a random stream of bits
+bits = randi([0 1 ], Nb, 1);
+
+% QAM mapping and Upsampling
+mapped_symbols = mapping(bits, Nbps, 'qam');
+
+TX_symb_up = upsample(mapped_symbols, OSF); % upsamle the symbol sequence by a factor OSF
+
+%plot sent symbols
+scatterplot(mapped_symbols);
+
+% RRC filtering
+[h_RRC, H_RRC, H_RC_plot, h_RC] = RaisedCosine(f, T_symb, rollOff, N_taps);
+h_RRC = h_RRC' ; % transpose the filter to use in convolution
+
+% normalize h(t) 
+% H_time = H_time / max(abs(H_time));
+one_zeros = zeros(1, N_taps);
+one_zeros((N_taps+1)/2) = 1;
+
+
+figure;
+subplot(2,1,1);
+plot(f, H_RC_plot, 'b', 'LineWidth',1.5)
+title ('frequency response of the Raised cosine filter')
+xlabel('Frequency [Hz]');
+ylabel('Magnitude [dB]');
+grid on;
+
+subplot(2,1,2);
+plot(t, h_RC, 'r', MarkerSize=3, MarkerFaceColor='auto');
+hold on;
+stem(t_symb, one_zeros, 'g', 'LineWidth',1.5);
+hold on;
+plot(t, h_RRC, 'b', 'LineWidth', 1.5)
+title('impulse response of the Raised cosine filter')
+
+
+% applying first half root cosine filter
+% baseband transmitted signal
+filtered_TX_signal = conv(TX_symb_up, h_RRC); % convolution between filter impulse response and oversampled symbols vector
+
+
+% signal power 
+signalPowerBaseband = mean(abs(filtered_TX_signal).^2)*T_symb; % power of the complex baseband( average baseband symbol energy 
+signalPowerWideband = signalPowerBaseband/2; % when transmitted over a real channel, the power is plit in 2
+Eb = signalPowerWideband /Nbps; % energy per bit
+
+EbN0_index = 1;
+for EbN0 = EbN0_dom
+    for i=1:iter   
+
+        N0 = Eb/(10^(EbN0/10));             % Noise PSD (Power Spectral Density)
+        noisePower =N0*Fsampling;              % AWGN power
+
+        % Generate AWGN Noise
+        noise = sqrt(noisePower)*(randn(1,length(filtered_TX_signal)) + 1i*randn(1, length(filtered_TX_signal)));
+
+        % Add Noise to Signal
+        sn = filtered_TX_signal + noise.';
+
+        % CFO et Phase
+
+        PPM = 500;  % décalage de fréquence en parties par million
+        CFO_Hz = PPM * f_symb / 1e6;  % conversion PPM → Hz
+        phase_offset = 0;       % décalage de phase fixe
+        time_shift_frac = 0;     % décalage temporel en fraction de T_symb
+        
+        % Recalcule axe temps pour signal filtré
+        n = 0:length(sn)-1;
+        ts = n / Fsampling;
+        ts = ts(:);
+        
+        % 1. Appliquer CFO + phase
+        sn = sn .* exp(1j*(2*pi*CFO_Hz*ts + phase_offset));
+        
+        % 2. Appliquer sample time shift (interpolation)
+        % jsp trop ou il faut le mettre en vrai
+        delta_t = time_shift_frac * T_symb;
+        sn = interp1(ts, sn, ts + delta_t, 'linear', 0);
+        %---------------
+        % peu etre mettre ça apres le halfroot
+
+
+        % Half Root Raised Cosine (RRC) Filtering at receptor
+        RX_signal1 = conv(sn, h_RRC);
+        RX_signal = RX_signal1((length(h_RRC)-1) + (1:length(TX_symb_up)));
+
+        % Downsampling & Demapping
+        RX_downsampled_by2 = downsample(RX_signal, 2);  % OSF = 4 → on garde 2 échantillons/symbole
+
+        %RX_symb_down = downsample(RX_signal, OSF);
+
+        % NB : the downsampling is done at the same time
+        K = 0.01;  % poids d’erreur (à ajuster pour stabilité/convergence)
+        [RX_TTT, timing_error] = gardner(RX_downsampled_by2, K, 2);
+
+        bit_rx = demapping(RX_TTT.', Nbps, 'qam');
+
+        % Computing BER
+        %BER_array(i) = sum(bit_rx ~= bits)/Nb;
+        min_len = min(length(bit_rx), length(bits));
+        BER_array(i) = sum(bit_rx(1:min_len) ~= bits(1:min_len)) / min_len;
+
+    end
+    BER(EbN0_index) = sum(BER_array(:))/iter;
+    EbN0_index = EbN0_index + 1;
+end
+
+% figure;
+% title('transmit and received signal')
+% plot(linspace(0,symbols/BW, symbols*OSF), TX_symb_up, 'r')
+% hold on
+% plot(linspace(0,symbols/BW, symbols*OSF), RX_signal, 'g')
+% legend('transmitted signal', 'received signal')
+
+
+
+scatterplot(RX_TTT);
+
+
+fprintf('BER = %e\n', BER);
+
+%% plots BER
+
+figure;
+grid on;
+title('ber curves for 16-QAM')
+semilogy(EbN0_dom,BER(:));hold on;
+semilogy(EbN0_dom, berawgn(EbN0_dom,'qam',2^Nbps))
+xlabel('Eb/N0 [dB]');
+ylabel('BER');
+title('Bit Error Rate');
+legend('Experimental', 'Theoritical');
+ ylim([10^-5 1]);
