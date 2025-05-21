@@ -10,15 +10,14 @@ clear; clc; close all;
 
 %% parameters
 
-% Nbps_list = [4, 6];        % 4 → 16-QAM, 6 → 64-QAM
-% M_list = [16, 64];
-% labels    = {'16-QAM','64-QAM'};
+modulation = 'qam';
+Nbps_list = [4, 6, 8];        % 4 → 16-QAM, 6 → 64-QAM
+M_list = [16, 64, 256];
+labels     = {'16-QAM','64-QAM','256-QAM'};
 % for idx = 1:length(Nbps_list)
 
-Nbps = 4; % number of bit per symbol
-modulation = 'qam';
 Nsymb = 5000; % number of symbols
-Nb = Nbps * Nsymb; % number of bits
+
 rollOff = 0.2; % roll-off factor
 OSF = 4; % oversampling factor, to increase the sampling frequency
 N_taps = 101 ;%number of taps, odd so the filter response is centered
@@ -28,7 +27,7 @@ averageNb = 1; % number of iterations to average the BER
 T_symb = (1 + rollOff)/BW ; % symbol period, inverse of the symbol rate
 f_symb = 1/T_symb; % symbol rate. [symb/s]
 Fsampling =  f_symb*OSF; % sampling frequency, calculated as f_symb * M
-Tbit = T_symb / Nbps;
+
 
 % frequency domain generation
 stepOffset = Fsampling * 1/N_taps; % stepOffset, calculate the frequency step size
@@ -48,7 +47,14 @@ BER_array = zeros(1,iter);
 BER = zeros(1, length(EbN0_dom));
 
 %% signal processing 
-
+% Pre-allocate result matrices
+nMods = length(Nbps_list);
+BER_exp = zeros(nMods, length(EbN0_dom));
+BER_th  = zeros(nMods, length(EbN0_dom));
+for m = 1:nMods
+    Nbps = Nbps_list(m);
+    Nb    = Nbps * Nsymb;            % total bits
+    Tbit = T_symb / Nbps;
 % generate a random stream of bits
 bits = randi([0 1 ], Nb, 1);
 
@@ -96,7 +102,10 @@ signalPowerWideband = signalPowerBaseband/2; % when transmitted over a real chan
 Eb = signalPowerWideband /Nbps; % energy per bit
 
 EbN0_index = 1;
+
+
 for EbN0 = EbN0_dom
+    
     for i=1:iter   
 
         N0 = Eb/(10^(EbN0/10));             % Noise PSD (Power Spectral Density)
@@ -127,16 +136,35 @@ for EbN0 = EbN0_dom
     EbN0_index = EbN0_index + 1;
 end
 fprintf('BER = %e\n', BER);
+end
 
 %% plots BER
+figure; hold on; grid on;
+colors = lines(nMods);
+linestyles = {'-','--'};    % solid = sim, dashed = theo
 
-figure;
-title('ber curves for 16-QAM')
-semilogy(EbN0_dom,BER(:));hold on;
-semilogy(EbN0_dom, berawgn(EbN0_dom,modulation,2^Nbps))
-xlabel('Eb/N0 [dB]');
+for m = 1:nMods
+    semilogy(EbN0_dom, BER_exp(m,:),  linestyles{1}, 'Color',colors(m,:), 'LineWidth',1.5);
+    semilogy(EbN0_dom, BER_th(m,:),   linestyles{2}, 'Color',colors(m,:), 'LineWidth',1.5);
+end
+
+xlabel('E_b/N_0 [dB]');
 ylabel('BER');
-title('Bit Error Rate');
-legend('Experimental', 'Theoritical');
- ylim([10^-5 1]);
+title('BER curves for different QAM modulations');
+legendEntries = {};
+for m = 1:nMods
+    legendEntries{end+1} = [labels{m} ' (sim)'];
+    legendEntries{end+1} = [labels{m} ' (theo)'];
+end
+legend(legendEntries,'Location','southwest');
+ylim([1e-5 1]);
 
+% figure;
+% 
+% semilogy(EbN0_dom,BER(:));hold on;
+% semilogy(EbN0_dom, berawgn(EbN0_dom,modulation,2^Nbps))
+% xlabel('Eb/N0 [dB]');
+% ylabel('BER');
+% title('ber curves for 16-QAM')
+% legend('Experimental', 'Theoritical');
+%  ylim([10^-5 1]);
