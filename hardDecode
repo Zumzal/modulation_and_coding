@@ -1,0 +1,33 @@
+function u_est  = hardDecode(r, H, maxit)
+    u_est = zeros(size(r));
+    [K, N] = size(H);
+    n_rows = size(r,1);
+    for i = 1:n_rows
+        row = r(i, :);
+        v_nodes = row;
+        s = mod(row * H',2);
+        iter = 0;
+        while ((iter < maxit) && (sum(s) ~= 0))
+            c_nodes = zeros(K,1);
+            for j = 1:K
+                temp = v_nodes;
+%                 for k = 1:N
+%                     if iter > 0
+%                         temp(k) = sum(H(:,k) .* c_nodes) + row(k) - H(j,k) * c_nodes(j) > (sum(H(:,k))+1) / 2;
+%                     end
+%                 end
+                c_nodes(j) = mod(sum(H(j,:) .* temp), 2);
+            end
+            for j = 1:N
+                temp = c_nodes;
+                for k = 1:K
+                    temp(k) = mod(temp(k) + v_nodes(j)*H(k,j),2);
+                end
+                v_nodes(j) = sum(H(:,j) .* temp) + row(j) >= (sum(H(:,j)) + 1) / 2;
+            end
+            iter = iter + 1;
+            s = mod(v_nodes * H',2);
+        end
+        u_est(i, :) = v_nodes;
+    end
+end
