@@ -1,0 +1,167 @@
+%% step2
+clear; close all; clc;
+
+%%% project modulation and coding %%%%
+
+%%% Nima Khansir %%%
+
+
+%% step 1 : mapping and demapping of bit stream
+
+%% parameters
+
+% Nbps_list = [4, 6];        % 4 → 16-QAM, 6 → 64-QAM
+% M_list = [16, 64];
+% labels    = {'16-QAM','64-QAM'};
+% for idx = 1:length(Nbps_list)
+
+Nbps = 4; % number of bit per symbol
+modulation = 'qam';
+Nsymb = 5000; % number of symbols
+Nb = Nbps * Nsymb; % number of bits
+rollOff = 0.2; % roll-off factor
+OSF = 4; % oversampling factor, to increase the sampling frequency
+N_taps = 101 ;%number of taps, odd so the filter response is centered
+BW = 6e6; % 6MHz of bandwith
+averageNb = 1; % number of iterations to average the BER
+
+T_symb = (1 + rollOff)/BW ; % symbol period, inverse of the symbol rate
+f_symb = 1/T_symb; % symbol rate. [symb/s]
+Fsampling =  f_symb*OSF; % sampling frequency, calculated as f_symb * M
+Tbit = T_symb / Nbps;
+
+% frequency domain generation
+stepOffset = Fsampling * 1/N_taps; % stepOffset, calculate the frequency step size
+fmax = stepOffset * (N_taps*1)/2; % highest/maximum frequency
+f = linspace(-fmax, fmax, N_taps); % frequency grid
+
+% time domain generation
+Delta_t = 1/Fsampling; % Time resolution
+t = (-(N_taps-1)/2 : (N_taps-1)/2) * Delta_t; % time vector for the impulse response of the Nyquist filter
+t_symb = (-(N_taps-1)/2 : (N_taps-1)/2) * T_symb; % time vector in terms of symbol duration
+
+%% BER parameters
+EbN0max = 20;
+EbN0_dom = 0:1:EbN0max;
+iter = 20;
+BER_array = zeros(1,iter);
+BER = zeros(1, length(EbN0_dom));
+
+%% CFO and phase offset parameters 
+
+Fc = 600e6; % carrier frequency is 600MHz
+ppm = 0; 
+ppm1 = [0 2 10 20 50 100 200 500 1000];
+
+phase_offset_deg = [0 1 2 3 5 10 30];
+phase_offset = phase_offset_deg * pi/180;
+
+
+
+%% signal processing 
+
+% generate a random stream of bits
+bits = randi([0 1 ], Nb, 1);
+
+% QAM mapping and Upsampling
+mapped_symbols = mapping(bits, Nbps, modulation);
+
+TX_symb_up = upsample(mapped_symbols, OSF); % upsamle the symbol sequence by a factor OSF
+
+%plot sent symbols
+scatterplot(mapped_symbols);
+
+% RRC filtering
+[h_RRC, H_RRC, H_RC_plot, h_RC] = RaisedCosine(f, T_symb, rollOff, N_taps);
+h_RRC = h_RRC' ; % transpose the filter to use in convolution
+
+one_zeros = zeros(1, N_taps);
+one_zeros((N_taps+1)/2) = 1;
+
+
+figure;
+subplot(2,1,1);
+plot(f, H_RC_plot, 'b', 'LineWidth',1.5)
+title ('frequency response of the Raised cosine filter')
+xlabel('Frequency [Hz]');
+ylabel('Magnitude [dB]');
+grid on;
+
+subplot(2,1,2);
+plot(t, h_RC, 'r', MarkerSize=3, MarkerFaceColor='auto');
+hold on;
+stem(t_symb, one_zeros, 'g', 'LineWidth',1.5);
+hold on;
+plot(t, h_RRC, 'b', 'LineWidth', 1.5)
+title('impulse response of the Raised cosine filter')
+
+
+% applying first half root cosine filter
+% baseband transmitted signal
+filtered_TX_signal = conv(TX_symb_up, h_RRC); % convolution between filter impulse response and oversampled symbols vector
+
+
+% signal power 
+signalPowerBaseband = mean(abs(filtered_TX_signal).^2)*T_symb; % power of the complex baseband( average baseband symbol energy 
+signalPowerWideband = signalPowerBaseband/2; % when transmitted over a real channel, the power is plit in 2
+Eb = signalPowerWideband /Nbps; % energy per bit
+
+
+ber_po = zeros(length(phase_offset),length(EbN0_dom));
+for k = 1:length(phase_offset)
+
+CFO = ppm*Fc*1e-6; % carrier frequency offset
+
+EbN0_index = 1;
+for EbN0 = EbN0_dom
+    for i=1:iter   
+
+        N0 = Eb/(10^(EbN0/10));             % Noise PSD (Power Spectral Density)
+        noisePower =N0*Fsampling;              % AWGN power
+
+        % Generate AWGN Noise
+        noise = sqrt(noisePower)*(randn(1,length(filtered_TX_signal)) + 1i*randn(1, length(filtered_TX_signal)));
+
+        % Add Noise to Signal
+        sn = filtered_TX_signal + noise.';
+        t1 = ((0:size(sn,2)-1))*1/Fsampling; % time vector for the exponential
+        RX_signal_sync_errors = sn .*exp(1j*(2*pi*CFO*t1 + phase_offset(k)));
+
+        % Half Root Raised Cosine (RRC) Filtering at receptor
+        RX_signal1 = conv(RX_signal_sync_errors, h_RRC);
+        RX_signal = RX_signal1((length(h_RRC)-1) + (1:length(TX_symb_up)));
+
+        % Downsampling & Demapping
+        RX_symb_down = downsample(RX_signal, OSF);
+        bit_rx = demapping(RX_symb_down, Nbps, modulation);
+
+        % Computing BER
+        BER_array(i) = sum(bit_rx ~= bits)/Nb;
+    end
+    
+    % scatterplot(RX_symb_down);
+    % title(['Constellation at Eb/N0 = ', num2str(EbN0), ' dB']);
+
+    BER(EbN0_index) = sum(BER_array(:))/iter;
+    EbN0_index = EbN0_index + 1;
+end
+scatterplot(RX_symb_down);
+title(['Constellation for phase offset = ', num2str(phase_offset_deg(k)), '°']);
+ber_po(k,:) = BER;
+end
+fprintf('BER = %e\n', BER);
+
+%% plots BER
+
+figure;
+for j = 1:length(phase_offset)
+    semilogy(EbN0_dom, ber_po(j,:));
+    hold on;
+end
+
+xlabel('Eb/N0 [dB]');
+ylabel('BER');
+title('Bit Error Rate for different values of phase_offset');
+legend('0°', '1°', '2°', '3°', '5°', '10°', '30°');
+ ylim([10^-5 1]);
+
