@@ -1,0 +1,37 @@
+function [h_RRC, H_RRC, H_RC_plot, h_RC] = RaisedCosine(f, T, beta, n)
+
+%% computes the nyquist filter ( RC) and its root ( RRC)
+% Inputs : 
+% f : frequency grid from -fmax to fmax[Hz]
+% T : symbol period or symbol duration [s]
+% beta : RollOff factor (0< beta <=1)
+% n : number of fft points ( define the time resolution) = Number of taps
+% of the filter
+%
+% Outputs : 
+% h_RRC : Time domain impulse response of the Raised Cosine Filter
+% H_RRC : Frequency domain representation of the Raised Cosine Filter
+    %% generate the filter in the frequency domain.   
+    H_RC = zeros(1,n);  % initialize the freq response array
+    for i = 1:length(f)
+        if abs(f(i)) < (1-beta)/(2*T)
+            H_RC(i) = T;
+        elseif abs(f(i)) > (1+beta)/(2*T)
+            H_RC(i) = 0;
+        else
+            H_RC(i) = (T/2) * (1 + cos( (pi*T/beta) * (abs(f(i)) - (1-beta)/(2*T)) )) ;
+        end
+    end
+    
+% time domain conversion  
+H_RC_plot = H_RC;                                                       % asve the original freq response for plotting
+H_RC = ifftshift(H_RC);                                                 % Shift zero frequency component to the center
+H_RRC = sqrt(H_RC);                                                     % Compute the root raised cosine filter
+h_RC = ifft(H_RC);                                                      % Inverse FFT to get the time domain response of RC filter
+h_RRC = ifft(H_RRC);                                                    % Inverse FFT to get the time domain response of RRC filter
+h_RRC = fftshift(h_RRC / sqrt(h_RC(1)));                                % Normalize and shift the RRC impulse response
+h_RC = fftshift(h_RC / h_RC(1));                                        % Normalize and shift the RC impulse response
+
+
+% normalize h(t) 
+h_RC = h_RC / max(abs(h_RC));
